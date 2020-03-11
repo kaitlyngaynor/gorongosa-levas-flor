@@ -70,8 +70,8 @@ params = c("rho","pbeta","spbeta","sigpbeta","mbeta","sigbeta","sbeta","gbeta","
 #Specify the number of chains (nc), number of iterations (ni), burn-in period (nb), and thinning
 #rate (nthin)
 nc = 3
-ni = 6000
-nb = 1000
+ni = 60000
+nb = 10000
 nthin = 50
 
 
