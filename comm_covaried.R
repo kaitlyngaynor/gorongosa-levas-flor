@@ -25,16 +25,16 @@ cam_dt_long2 <- merge(cam_dt_long,det_CoVar,by="StudySite",all=TRUE)
 #merge with psi covariates
 cam_dt_long3 <- merge(cam_dt_long,psi_CoVar,by="StudySite",all=TRUE)
 #add species specific feeding guild
-cam_dt_long4 <- merge(cam_dt_long3,sp_dt[,c("SPECIES","Size")],by="SPECIES",all=TRUE)
+cam_dt_long4 <- merge(cam_dt_long3,sp_dt[,c("SPECIES","Order")],by="SPECIES",all=TRUE)
 
 #Define the group variables
 #G <- cbind(as.numeric(sp_dt$Size=="L"),as.numeric(sp_dt$Size=="M"),
            #as.numeric(sp_dt$Size=="S")) 
-G <- cbind(as.numeric(sp_dt$Diet=="Carnivore"),as.numeric(sp_dt$Diet=="Herbivore"))
+G <- cbind(as.numeric(sp_dt$Order=="carnivore"),as.numeric(sp_dt$Order=="other"),as.numeric(sp_dt$Order=="primate"),as.numeric(sp_dt$Order=="rodent"))
 #Define the covariates for occupancy
 X = cam_dt_long4[,c(5:8)] #X = D[,5:8]
 #Define the group covariates
-XG = cbind(X*G[,1],X*G[,2]) 
+XG = cbind(X*G[,1],X*G[,2],X*G[,3],X*G[,4]) 
 #Define the covariates for detection
 dX = cam_dt_long2[,c(4:7)]#dX = D[,9:11]
 
@@ -88,7 +88,7 @@ out3 <- jags(data = data,
 #Write the model code to a text file called "AllMammals.txt"
 
 #See a summary of the parameter estimates
-out3.sum <- output$BUGSoutput$summary
+out3.sum <- out3$BUGSoutput$summary
 
 write.table(x=out3.sum,file="results/dietgrp-030920.csv",sep=",", row.names=F) # save output
 
@@ -135,7 +135,7 @@ sbeta <- out3$BUGSoutput$sims.list$sbeta
 
 # Calculate group-level estimates.
 covs <- colnames(X) # define covariates
-sizes <- c("Omnivore", "Carnivore", "Herbivore") # define groups
+sizes <- c("ungulate", "carnivore", "other", "primate", "rodent") # define groups
 group <- data.frame(expand.grid(covs, sizes), matrix(NA, length(covs) * length(sizes), 4)) # create data frame where number of rows is equal to the number of covariates * the number of groups
 colnames(group) <- c("Factor", "Group", "Mean", "SD", "LCI", "UCI")
 
@@ -161,12 +161,12 @@ write.table(x = group, file = "results/dietgrp-030920_group.csv", sep = ",", row
 spec <- sp_dt[,1]
 
 # Define the group levels
-levels(sp_dt$Diet) <- levels(sp_dt$Diet)[c(1,2,3)]
+levels(sp_dt$Order) <- levels(sp_dt$Order)[c(1,2,3,4,5)]
 gg <- as.numeric(sp_dt$Diet)
 
 # Define the occupancy covariates and groups
 covs <- colnames(X)
-sizes <- c("Omnivore","Carnivore","Herbivore")
+sizes <- c("ungulate", "carnivore", "other", "primate", "rodent") # define groups
 
 # Create a data frame where the number of rows is equal to the number of covariates * the number of species
 species <- data.frame(expand.grid(covs,spec), matrix(NA,length(covs)*length(spec),4))
@@ -188,69 +188,20 @@ write.table(x=species,file="results/dietgrp-030920_species.csv",sep=",", row.nam
 
 
 
-# calculate distributions for community hyperparameters
-comm_param <- as.data.frame(mbeta)
-names(comm_param) <- covs
-head(comm_param)
-comm_param_long <- comm_param %>% 
-  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value")
-write.csv(comm_param_long, "results/dietgrp-030920_communityposteriors.csv", row.names = F)
-
-# and for group hyperparameters
-head(gbeta)
-group_param <- as.data.frame(gbeta)
-
-group_param_carn <- group_param[,1:4]
-names(group_param_carn) <- covs
-group_param_carn_long <- group_param_carn %>% 
-  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
-  mutate(Group = "Carnivore")
-
-group_param_herb <- group_param[,5:8]
-names(group_param_herb) <- covs
-group_param_herb_long <- group_param_herb %>% 
-  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
-  mutate(Group = "Herbivore")
-
-group_param_omni <- comm_param # reference group
-names(group_param_omni) <- covs
-group_param_omni_long <- group_param_omni %>% 
-  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
-  mutate(Group = "Omnivore")
-
-group_param_long <- rbind(group_param_herb_long, group_param_carn_long, group_param_omni_long)
-head(group_param_long)
-
-ggplot(group_param_long, aes(x = Value, y = Factor, fill = Group)) +
-  geom_density_ridges(scale=.8) +
-  theme_ridges() +
-  theme(legend.position = "none") +
-  geom_vline(xintercept=0) +
-  facet_wrap(~Group)
-
-ggplot(group_param_long, aes(x = Value, group = Group, fill = Group)) +
-  geom_density() +
-  theme_ridges() +
-  geom_vline(xintercept=0) +
-  facet_grid(Factor~Group)
-
-
-
 
 # Species richness for each site - FIX FOR TARA DATA
 
 # Define the z matrix
 z = out3$BUGSoutput$sims.list$Z
 
-
 # Sort the data frame based on species, study site, and diet category
-d <- sort_df(merge(data.frame(ID = 1:nrow(cam_dt_long),cam_dt_long[,1:2]),data.frame(SppCode = spec, Group = sp_dt$Diet)),"ID")[,c(1,3,4)]
+d <- sort_df(merge(data.frame(ID = 1:nrow(cam_dt_long),cam_dt_long[,1:2]),data.frame(SPECIES = spec, Group = sp_dt$Order)),"ID")[,c(1,3,4)]
 
 # Create a new data frame
 dz <- data.frame(d,t(z))
 
 # Melt the data frame for easy casting
-m.dz <- melt(dz,id.vars = c("SppCode","StudySite","Group") )
+m.dz <- melt(dz,id.vars = c("SPECIES","StudySite","Group") )
 
 # Aggregate the data by summing the values in the z matrix for each StudySite station during each iteration
 z.all <- acast(m.dz,StudySite ~ variable, fun.aggregate = sum)
