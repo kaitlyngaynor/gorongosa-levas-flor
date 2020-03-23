@@ -1,0 +1,329 @@
+---
+title: "Levas Flor Occupancy"
+author: "Kaitlyn Gaynor & Lindsey Rich"
+date: "3/23/20"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Multi-species occupancy modeling
+
+Rather than re-run Tara's code, using my code and adapting for Tara's data.
+
+Get set-up. Load libraries, etc.
+```{r setup}
+library(R2jags)
+library(reshape)
+library(reshape2)
+library(plyr)
+library(dplyr)
+library(here)
+library(tidyverse)
+library(xlsx)
+```
+
+Define function for standardizing the covariates. You'll need this later.
+```{r stdev}
+zstd <- function (x)  (x-mean(x,na.rm = T))/sd(x,na.rm = T)  
+```
+
+# Import and manipulate detection/operation histories and metadata.
+
+```{r import data}
+D <- read.xlsx("Data2.xlsx", sheetName = "daily_occ")
+
+psi_CoVar <- read.xlsx("Data2.xlsx", sheetName = "PsiCov")
+det_CoVar <- read.xlsx("Data2.xlsx", sheetName = "DetCov")
+Covariates <- join(psi_CoVar, det_CoVar)
+names(Covariates) # take a look at covariate names
+
+# Species IDs and traits (reduce to species present in LF)
+Spp <- read.csv("~/Documents/github-repos/gorongosa/gorongosa-anim-cons/Species_metadata_allsites.csv") %>% 
+  filter(Levas_Flor == 1) %>% 
+  droplevels()
+```
+
+Save species names for use later when exporting model results
+```{r save species names}
+# sppnames2 is just missing 'SppCode' line
+sppnames <- c("SppCode", as.character(unique(Spp$SppCode)))
+sppnames2 <- as.character(unique(Spp$SppCode))
+```
+
+# Run model
+
+This model includes all six covariates from original analysis.
+```{r dry season both years with covariates}
+# Reorganize detection dataframe, so that it has one column for species and one for detections (rather than a column for each species)
+D <- melt(D,vars = c("StudySite"))
+colnames(D)[2:3] = c("Easter_name","Detections")
+head(D) # make sure it worked
+
+# Combine detection history with StudySite covariates and species traits
+D <- merge(D, Covariates, by = "StudySite") # joins by StudySite
+D <- merge(D, Spp, by = "Easter_name") # joins by SppCode
+head(D)
+
+# order by SppCode and Study Site
+D <- D[order(D$SppCode, D$StudySite),]
+
+# for later group-level analysis
+G <- cbind(as.numeric(D$FunctionalGroupBG=="Carnivore"),
+           as.numeric(D$FunctionalGroupBG=="Other_forager"),
+           as.numeric(D$FunctionalGroupBG=="Primate"),
+           as.numeric(D$FunctionalGroupBG=="UngulateB")) 
+
+
+# select occupancy covariates
+X = dplyr::select(D, dist_settle, dist_allriv, ndvi_500buff, dist_ALLactrds)
+# normalize them
+X = apply(X,2,zstd)
+
+## select detection covariates
+dX = dplyr::select(D, human_rate, ndvi)
+# normalize them
+dX = apply(dX,2,zstd)
+
+## identify group covariates
+XG = cbind(X*G[,1], X*G[,2], X*G[,3], X*G[,4])
+
+# Define data and parameters. Load all the data including the detection array, number of sampling occasions, individual species sampled, total number of sampled species, and covariate information.
+data <- list(D = D$Detections, # number of detections
+             N = ceiling(D[,"num.nights"]), # number of trap-nights for each StudySite
+             Species = as.numeric(D$SppCode), # species
+             n = nrow(D), 
+             nspp = max(as.numeric(D$SppCode)),
+             X = X, 
+             XG = XG, 
+             dX = dX)
+
+# specify the initial values
+inits = function() {list(Z = as.numeric(data$D>0))}
+
+# specify the parameters to be monitored
+params = c("rho","pbeta","spbeta","sigpbeta","mbeta","sigbeta","sbeta","gbeta","psi.mean","sigma.occ","p.mean","sigma.p","alpha","Z","P")
+
+nc = 3       # number of chains
+ni = 60000   # number of iterations
+nb = 10000   # burn-in period
+nthin = 50   # thinning rate
+
+
+# Run occupancy model. The model file must be in the correct folder (see script AllMammals_pcov.txt)
+out3 <- jags(data = data, 
+             inits = inits, 
+             parameters.to.save = params, 
+             model.file ="AllMammals_pcov.txt", 
+             n.chains = nc, 
+             n.iter = ni,
+             n.burnin = nb, 
+             n.thin = nthin)
+
+out3.sum <- out3$BUGSoutput$summary
+
+```
+
+# Export the results
+
+### Occupancy and detection probabilities
+```{r}
+write.table(x=out3.sum,file="results/fxnlgrpbg-032320.csv",sep=",") # save output
+
+#Name this output alpha and P.
+alpha <- out3$BUGSoutput$sims.list$alpha
+p <- out3$BUGSoutput$sims.list$P
+
+# we are log transforming alphas b/c they are on logit scale.
+expit <- function(x)  1/(1+exp(-x))
+logit.alpha <- expit(alpha)
+logit.p <- expit(p)
+
+# Columns represent species, so we take the mean of each column to get the mean psi and p value (when covariates are at their mean values) for each species.
+
+psimeans <- colMeans(logit.alpha)
+names(psimeans) <- sppnames2
+psimeans <- as.data.frame(psimeans)
+write.table(x = psimeans, file = "results/fxnlgrpbg-032320_alphaspsi()p().csv", sep = ",")
+
+pmeans <- colMeans(logit.p)
+names(pmeans) <- sppnames2
+write.table(x = pmeans, file = "results/fxnlgrpbg-032320_detection.csv", sep=",")
+
+# Get the quantiles and 95% confidence intervals for psi and p.
+
+apply(logit.alpha, 2, function(x) sort(x)[])
+psiCI <- apply(logit.alpha, 2, function(x) quantile(x,probs = c(0.025,0.1,0.5,0.9,0.975)))
+colnames(psiCI) <- sppnames2
+write.table(x=psiCI, file="results/fxnlgrpbg-032320_alphaCI.psi()p().csv",sep=",")
+
+apply(logit.p, 2, function(x) sort(x)[])
+pCI <- apply(logit.p, 2, function(x) quantile(x,probs = c(0.025,0.1,0.5,0.9,0.975)))
+colnames(pCI) <- sppnames2
+write.table(x = pCI, file="results/fxnlgrpbg-032320_pCI.psi()p().csv", sep = ",")
+```
+
+
+### Occupancy covariate effects
+```{r}
+# Define the occupancy covariate effects where mbeta is the community-level hyperparameter, gbeta is the group-level hyperparameter, and sbeta is the species-specific parameter.
+mbeta <- out3$BUGSoutput$sims.list$mbeta
+gbeta <- out3$BUGSoutput$sims.list$gbeta
+sbeta <- out3$BUGSoutput$sims.list$sbeta
+
+# Calculate group-level estimates.
+covs <- colnames(X) # define covariates
+sizes <- c("UngulateG", "Carnivore", "Other_forager", "Primate", "UnglateB") # define groups
+
+group <- data.frame(expand.grid(covs, sizes), matrix(NA, length(covs) * length(sizes), 4)) # create data frame where number of rows is equal to the number of covariates * the number of groups
+colnames(group) <- c("Factor", "Group", "Mean", "SD", "LCI", "UCI")
+
+# Create a loop estimating the reference group values.
+for (a in 1:length(covs)){
+  group[a,3:6] <- c(mean(mbeta[,a]),sd(mbeta[,a]),quantile(mbeta[,a],c(0.025,0.975)))
+}
+
+# Create a second loop estimating the other group values.
+for (a in 1:length(covs)){
+  for (b in 1:(length(sizes)-1)){
+    sims <- mbeta[,a] + gbeta[,((b-1)*ncol(X)+a)]
+    group[(ncol(X)*(b)+a),3:6] <- c(mean(sims),sd(sims),quantile(sims,c(0.025,0.975)))
+  }
+}
+
+# Export table with group values.
+write.table(x = group, file = "results/fxnlgrpbg-032320_group.csv", sep = ",", row.names=F)
+
+
+# calculate distributions for reference group
+
+comm_param <- as.data.frame(mbeta)
+names(comm_param) <- covs
+head(comm_param)
+comm_param_long <- comm_param %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") 
+
+# and for group hyperparameters
+head(gbeta)
+group_param <- as.data.frame(gbeta)
+
+group_param_ungg <- comm_param # reference group
+names(group_param_ungg) <- covs
+group_param_ungg_long <- group_param_ungg %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
+  mutate(Group = "UngulateG")
+
+group_param_carn <- group_param[,1:4]
+names(group_param_carn) <- covs
+group_param_carn_long <- (group_param_carn + group_param_ungg) %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
+  mutate(Group = "Carnivore")
+
+group_param_other <- group_param[,5:8]
+names(group_param_other) <- covs
+group_param_other_long <- (group_param_other + group_param_ungg) %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
+  mutate(Group = "Other_forager")
+
+group_param_prim <- group_param[,9:12]
+names(group_param_prim) <- covs
+group_param_prim_long <- (group_param_prim + group_param_ungg) %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
+  mutate(Group = "Primate")
+
+group_param_ungb <- group_param[,13:16]
+names(group_param_ungb) <- covs
+group_param_ungb_long <- (group_param_ungb + group_param_ungg) %>% 
+  pivot_longer(cols = everything(), names_to = "Factor", values_to = "Value") %>% 
+  mutate(Group = "UngulateB")
+
+group_param_long <- rbind(group_param_carn_long, group_param_other_long, group_param_prim_long, group_param_ungb_long, group_param_ungg_long)
+head(group_param_long)
+write.csv(group_param_long, "results/fxnlgrpbg-032320_groupcovposteriors.csv", row.names = F)
+
+
+# Species level estimates 
+
+# Define the species
+spec <- Spp$SppCode
+
+# Define the group levels
+levels(Spp$FunctionalGroupBGTest) <- levels(Spp$FunctionalGroupBGTest)[c(1,2,3,4,5)]
+gg <- as.numeric(Spp$FunctionalGroupBGTest)
+
+# Define the occupancy covariates and groups
+covs <- colnames(X)
+sizes <- c("UngulateG", "Carnivore", "Other_forager", "Primate", "UnglateB") # define groups
+
+# Create a data frame where the number of rows is equal to the number of covariates * the number of species
+species <- data.frame(expand.grid(covs,spec), matrix(NA,length(covs)*length(spec),4))
+colnames(species) <- c("Factor","Species","Mean","SD","LCI","UCI")
+
+# Re-define gbeta
+gbeta <- cbind(gbeta, matrix(0,nrow(gbeta),length(covs)))
+
+# Create a loop that will estimate species-specific values for each of the covariates
+for (a in 1:length(covs)){
+  for (b in 1:length(spec)){
+    sims <- mbeta[,a] + gbeta[,((gg[b]-1)*ncol(X)+a)] + sbeta[,b,a]
+    species[(ncol(X)*(b-1)+a),3:6] <- c(mean(sims),sd(sims),quantile(sims,c(0.025,0.975)))
+  }
+}
+
+# export the table
+write.table(x=species,file="results/fxnlgrpbg-032320_species.csv",sep=",", row.names=F) 
+
+```
+
+
+## Species and group richness
+```{r}
+# Species richness for each site
+
+# Define the z matrix
+z = out3$BUGSoutput$sims.list$Z
+
+# Sort the data frame based on species, study site, and diet category
+d <- sort_df(data = merge(data.frame(ID = 1:nrow(D),
+                                     select(D, SppCode, StudySite)), 
+                          data.frame(SppCode = spec, 
+                                     Group = Spp$FunctionalGroupBG)
+                          ),
+             "ID")[,c(1,3,4)]
+
+# Create a new data frame
+dz <- data.frame(d,t(z))
+
+# Melt the data frame for easy casting
+m.dz <- melt(dz,id.vars = c("SppCode","StudySite","Group") )
+
+# Aggregate the data by summing the values in the z matrix for each StudySite station during each iteration
+z.all <- acast(m.dz,StudySite ~ variable, fun.aggregate = sum)
+write.table(x=z.all,file="results/fxnlgrpbg-032320_rawrichnessdistribution.csv",sep=",", row.names=F)
+
+
+# Use the aggregated values to create probability distributions and estimate mean, sd, and 95% credible interval values for StudySite-station specific species richness
+z.all <- t(apply(z.all,1,function(x) c(mean(x),sd(x),quantile(x,c(0.025,0.975)))))
+names <- rownames(z.all)
+rownames(z.all) <- NULL
+z.all <- cbind(names,z.all)
+colnames(z.all) = c("StudySite", "Mean","SD","LCI","UCI")
+
+# Export estimates of species richness as a table
+write.table(x=z.all,file="results/fxnlgrpbg-032320_spprich.csv",sep=",", row.names=F)
+
+# To estimate group richness for each site:
+
+# Aggregate the data by summing the group-specific values in teh z matrix for each StudySite station during each iteration
+z.group <- acast(m.dz,StudySite + Group ~ variable, fun.aggregate = sum)
+
+# Use the aggregated values to create probability distributions representing estimated StudySite-station specific group richness
+z.group <- t(apply(z.group,1,function(x) c(mean(x),sd(x),quantile(x,c(0.025,0.975)))))
+names <- rownames(z.group)
+rownames(z.group) <- NULL
+z.group <- cbind(names,z.group)
+colnames(z.group) = c("StudySite", "Mean","SD","LCI","UCI")
+
+# Export estimates of group richness as a table
+write.table(x=z.group,file="results/fxnlgrpbg-032320_grouprich.csv",sep=",", row.names=F)
+```
