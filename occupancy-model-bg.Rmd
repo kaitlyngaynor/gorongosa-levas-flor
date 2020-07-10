@@ -128,7 +128,7 @@ out3.sum <- out3$BUGSoutput$summary
 
 ### Occupancy and detection probabilities
 ```{r}
-write.table(x=out3.sum,file="results/fxnlgrpbg-032320.csv",sep=",") # save output
+write.table(x=out3.sum,file="results/fxnlgrpbg-070820.csv",sep=",") # save output
 
 #Name this output alpha and P.
 alpha <- out3$BUGSoutput$sims.list$alpha
@@ -144,23 +144,23 @@ logit.p <- expit(p)
 psimeans <- colMeans(logit.alpha)
 names(psimeans) <- sppnames2
 psimeans <- as.data.frame(psimeans)
-write.table(x = psimeans, file = "results/fxnlgrpbg-032320_alphaspsi()p().csv", sep = ",")
+write.table(x = psimeans, file = "results/fxnlgrpbg-070820_alphaspsi()p().csv", sep = ",")
 
 pmeans <- colMeans(logit.p)
 names(pmeans) <- sppnames2
-write.table(x = pmeans, file = "results/fxnlgrpbg-032320_detection.csv", sep=",")
+write.table(x = pmeans, file = "results/fxnlgrpbg-070820_detection.csv", sep=",")
 
 # Get the quantiles and 95% confidence intervals for psi and p.
 
 apply(logit.alpha, 2, function(x) sort(x)[])
 psiCI <- apply(logit.alpha, 2, function(x) quantile(x,probs = c(0.025,0.1,0.5,0.9,0.975)))
 colnames(psiCI) <- sppnames2
-write.table(x=psiCI, file="results/fxnlgrpbg-032320_alphaCI.psi()p().csv",sep=",")
+write.table(x=psiCI, file="results/fxnlgrpbg-070820_alphaCI.psi()p().csv",sep=",")
 
 apply(logit.p, 2, function(x) sort(x)[])
 pCI <- apply(logit.p, 2, function(x) quantile(x,probs = c(0.025,0.1,0.5,0.9,0.975)))
 colnames(pCI) <- sppnames2
-write.table(x = pCI, file="results/fxnlgrpbg-032320_pCI.psi()p().csv", sep = ",")
+write.table(x = pCI, file="results/fxnlgrpbg-070820_pCI.psi()p().csv", sep = ",")
 ```
 
 
@@ -192,7 +192,7 @@ for (a in 1:length(covs)){
 }
 
 # Export table with group values.
-write.table(x = group, file = "results/fxnlgrpbg-032320_group.csv", sep = ",", row.names=F)
+write.table(x = group, file = "results/fxnlgrpbg-070820_group.csv", sep = ",", row.names=F)
 
 
 # calculate distributions for reference group
@@ -239,7 +239,7 @@ group_param_ungb_long <- (group_param_ungb + group_param_ungg) %>%
 
 group_param_long <- rbind(group_param_carn_long, group_param_other_long, group_param_prim_long, group_param_ungb_long, group_param_ungg_long)
 head(group_param_long)
-write.csv(group_param_long, "results/fxnlgrpbg-032320_groupcovposteriors.csv", row.names = F)
+write.csv(group_param_long, "results/fxnlgrpbg-070820_groupcovposteriors.csv", row.names = F)
 
 
 # Species level estimates 
@@ -271,7 +271,7 @@ for (a in 1:length(covs)){
 }
 
 # export the table
-write.table(x=species,file="results/fxnlgrpbg-032320_species.csv",sep=",", row.names=F) 
+write.table(x=species,file="results/fxnlgrpbg-070820_species.csv",sep=",", row.names=F) 
 
 ```
 
@@ -299,7 +299,7 @@ m.dz <- melt(dz,id.vars = c("SppCode","StudySite","Group") )
 
 # Aggregate the data by summing the values in the z matrix for each StudySite station during each iteration
 z.all <- acast(m.dz,StudySite ~ variable, fun.aggregate = sum)
-write.table(x=z.all,file="results/fxnlgrpbg-032320_rawrichnessdistribution.csv",sep=",", row.names=F)
+write.table(x=z.all,file="results/fxnlgrpbg-070820_rawrichnessdistribution.csv",sep=",", row.names=F)
 
 
 # Use the aggregated values to create probability distributions and estimate mean, sd, and 95% credible interval values for StudySite-station specific species richness
@@ -310,7 +310,7 @@ z.all <- cbind(names,z.all)
 colnames(z.all) = c("StudySite", "Mean","SD","LCI","UCI")
 
 # Export estimates of species richness as a table
-write.table(x=z.all,file="results/fxnlgrpbg-032320_spprich.csv",sep=",", row.names=F)
+write.table(x=z.all,file="results/fxnlgrpbg-070820_spprich.csv",sep=",", row.names=F)
 
 # To estimate group richness for each site:
 
@@ -325,5 +325,81 @@ z.group <- cbind(names,z.group)
 colnames(z.group) = c("StudySite", "Mean","SD","LCI","UCI")
 
 # Export estimates of group richness as a table
-write.table(x=z.group,file="results/fxnlgrpbg-032320_grouprich.csv",sep=",", row.names=F)
+write.table(x=z.group,file="results/fxnlgrpbg-070820_grouprich.csv",sep=",", row.names=F)
+```
+
+### Calculate Hill numbers
+(adapted from Broms et al 2018 https://besjournals.onlinelibrary.wiley.com/doi/10.1111/2041-210X.12296)
+
+```{r}
+hill1 <- vector("numeric")
+hill2 <- vector("numeric")
+
+for(i in 1:nrow(logit.alpha)) {
+  
+  sum.alpha <- rowSums(logit.alpha)[i] # add up all occupancy probabilities for all species, in that iteration
+  
+  hill1.input <- vector("numeric")
+  hill2.input <- vector("numeric")
+  
+  for(j in 1:ncol(logit.alpha)) {
+    relative.alpha <- logit.alpha[i,j] / sum.alpha
+    hill1.input[j] <- relative.alpha * log(relative.alpha)
+    hill2.input[j] <- relative.alpha * relative.alpha
+  }
+
+  # Hill1 - represents Shannon diversity
+  hill1[i] <- exp(-1 * sum(hill1.input))
+  
+  # Hill2 - represents Simpson diversity
+  hill2[i] <- 1/sum(hill2.input)
+}
+
+hill <- cbind(hill1, hill2)
+
+
+# for ungulates
+
+# make list of only ungulates
+spp_key <- Spp %>% 
+  filter(FunctionalGroupBG %in% c("UngulateB", "UngulateG")) %>% 
+  select(SppCode) %>% 
+  as.list() %>% 
+  unlist(use.names=FALSE)
+
+# subset alphas for ungulates
+logit.alpha.df <- as.data.frame(logit.alpha)
+names(logit.alpha.df) <- sppnames2
+logit.alpha.ungulate <- logit.alpha.df %>% 
+  select(spp_key)
+
+hill1_ungulate <- vector("numeric")
+hill2_ungulate <- vector("numeric")
+
+for(i in 1:nrow(logit.alpha.ungulate)) {
+  
+  sum.alpha <- rowSums(logit.alpha.ungulate)[i] # add up all occupancy probabilities for all species, in that iteration
+  
+  hill1.input.ungulate <- vector("numeric")
+  hill2.input.ungulate <- vector("numeric")
+  
+  for(j in 1:ncol(logit.alpha.ungulate)) {
+    relative.alpha <- logit.alpha.ungulate[i,j] / sum.alpha
+    hill1.input.ungulate[j] <- relative.alpha * log(relative.alpha)
+    hill2.input.ungulate[j] <- relative.alpha * relative.alpha
+  }
+
+  # Hill1 - represents Shannon diversity
+  hill1_ungulate[i] <- exp(-1 * sum(hill1.input.ungulate))
+  
+  # Hill2 - represents Simpson diversity
+  hill2_ungulate[i] <- 1/sum(hill2.input.ungulate)
+}
+
+hill_ungulate <- cbind(hill1_ungulate, hill2_ungulate)
+
+hill_all <- cbind(hill, hill_ungulate)
+
+write.table(hill_all, "results/fxnlgrpbg-070820_hill.csv", sep = ",", row.names=F)
+
 ```
